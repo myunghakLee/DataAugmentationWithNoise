@@ -37,10 +37,6 @@ from plots import *
 from analytical_helper_script import run_test_with_mixup
 #from attacks import run_test_adversarial, fgsm, pgd
 
-# gpu number
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
 model_names = sorted(name for name in models.__dict__
   if name.islower() and not name.startswith("__")
   and callable(models.__dict__[name]))
@@ -65,8 +61,7 @@ parser.add_argument('--train', type=str, default = 'vanilla', choices =['vanilla
                                                                         'vanilla_cutout_consistency_proposed',
                                                                         'horizontal_flip', 'vanilla_horizontal_flip', 
                                                                         'vanilla_horizontal_flip_consistency_reg',
-                                                                         'vanilla_horizontal_flip_concistency_proposed',
-                                                                       'vanilla_horizontal_flip_consistency_reg'])
+                                                                         'vanilla_horizontal_flip_concistency_proposed'])
 parser.add_argument('--mixup_alpha', type=float, default=0.0, help='alpha parameter for mixup')
 parser.add_argument('--cutout', type=int, default=16, help='size of cut out')
 
@@ -94,8 +89,17 @@ parser.add_argument('--workers', type=int, default=2, help='number of data loadi
 parser.add_argument('--manualSeed', type=int, help='manual seed')
 parser.add_argument('--add_name', type=str, default='')
 parser.add_argument('--job_id', type=str, default='')
+parser.add_argument('--gpu_id', type=str)
 
+# +
+# gpu number
 args = parser.parse_args()
+
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
+
+# -
+
 args.use_cuda = args.ngpu>0 and torch.cuda.is_available()
 
 out_str = str(args)
@@ -220,13 +224,7 @@ def train(train_loader, model, optimizer, epoch, args, log):
         target = target.long()
         input, target = input.cuda(), target.cuda()
         data_time.update(time.time() - end)
-        
-        """
-            reweighted target : target을 onehot vector 형식으로 나타낸것
-        
-        """
-        
-        
+
         if args.train == 'mixup':
             input_var, target_var = Variable(input), Variable(target)
             output, reweighted_target = model(input_var,target_var, mixup= True, mixup_alpha = args.mixup_alpha)
@@ -242,50 +240,44 @@ def train(train_loader, model, optimizer, epoch, args, log):
             output, reweighted_target = model(input_var, target_var)
             loss = bce_loss(softmax(output), reweighted_target)
 
-        elif args.train == 'cutout':  # input을 집어 넣을 때 cutout해서 넣음
+        elif args.train == 'cutout':
             cutout = Cutout(1, args.cutout)
             cut_input = cutout.apply(input)
-            
-            input_var,target_var = torch.autograd.Variable(input), torch.autograd.Variable(target)
+            input_var = torch.autograd.Variable(input)
+            target_var = torch.autograd.Variable(target)
             cut_input_var = torch.autograd.Variable(cut_input)
-            
             output, reweighted_target = model(cut_input_var, target_var)
             loss = bce_loss(softmax(output), reweighted_target)
-            
-        elif args.train == 'vanilla_cutout': #cutout해서나온 loss와 cutout하지 않고 그냥 넣어서 나온 loss를 합함
+
+        elif args.train == 'vanilla_cutout':
             cutout = Cutout(1, args.cutout)
             cut_input = cutout.apply(input)
-            
-            input_var,target_var = torch.autograd.Variable(input), torch.autograd.Variable(target)
+            input_var = torch.autograd.Variable(input)
+            target_var = torch.autograd.Variable(target)
             cut_input_var = torch.autograd.Variable(cut_input)
-
             output, reweighted_target = model(input_var, target_var)
             loss = bce_loss(softmax(output), reweighted_target)
-            
             output_aug, reweighted_target_aug = model(cut_input_var, target_var)
             loss_aug = bce_loss(softmax(output_aug), reweighted_target_aug)
-            
             loss = loss + loss_aug
 
-        elif args.train == 'vanilla_cutout_consistency_reg': # {vanilla loss}와 {cut out의 output과 vanilla output}의 차이의 loss를 더함
+        elif args.train == 'vanilla_cutout_consistency_reg':
             cutout = Cutout(1, args.cutout)
             cut_input = cutout.apply(input)
-
-            input_var, target_var = torch.autograd.Variable(input), torch.autograd.Variable(target)
+            input_var = torch.autograd.Variable(input)
+            target_var = torch.autograd.Variable(target)
             cut_input_var = torch.autograd.Variable(cut_input)
-
             output, reweighted_target = model(input_var, target_var)
-            loss = bce_loss(softmax(output), reweighted_target) #우선 vanilla loss부터 구함
-            
-            
-            
+            loss = bce_loss(softmax(output), reweighted_target)
             output_aug, reweighted_target_aug = model(cut_input_var, target_var)
             output_anchor = Variable(output.detach().data, requires_grad=False)
-
-            loss_aug = mse_loss(output_anchor, output_aug) # cut out한 결과와 그냥 vanilla output의 loss를 구함
-            
+            loss_aug = mse_loss(output_anchor, output_aug)
             loss = loss + loss_aug
-
+#             print("=" * 100)
+#             print("Cutout function : ", Cutout)
+#             print("Cutout : ", cutout)
+#             print("cut_input : ", cut_input)
+#             exit(1)
             
         elif args.train == 'vanilla_cutout_consistency_proposed':
             # cutout = Cutout(1, args.cutout)
@@ -313,24 +305,30 @@ def train(train_loader, model, optimizer, epoch, args, log):
         elif args.train == 'horizontal_flip':
 #             cutout = Cutout(1, args.cutout)
             flip_input = torch.flip(input, (3,))
-            input_var, target_var = torch.autograd.Variable(input), torch.autograd.Variable(target)
+    
+            input_var = torch.autograd.Variable(input)
+            target_var = torch.autograd.Variable(target)
             flip_input_var = torch.autograd.Variable(flip_input)
             
             output, reweighted_target = model(input_var, target_var)
             loss = bce_loss(softmax(output), reweighted_target)        
+            
+
+        
         elif args.train == 'vanilla_horizontal_flip':
             flip_input = torch.flip(input, (3,))
-            input_var, target_var = torch.autograd.Variable(input), torch.autograd.Variable(target)
+            input_var = torch.autograd.Variable(input)
+            target_var = torch.autograd.Variable(target)
             flip_input_var = torch.autograd.Variable(flip_input)
-
-            output, reweighted_target = model(input_var, target_var)
             
+            output, reweighted_target = model(input_var, target_var)
             loss = bce_loss(softmax(output), reweighted_target)        
             
-            output_aug, reweighted_target_aug = model(flip_input_var, target_var)
-            output_anchor = Variable(output.detach().data, requires_grad=False)
-            loss_aug = mse_loss(output_anchor, output_aug)
-            loss = loss + loss_aug
+            output_aug, _ = model(flip_input_var, target_var)
+            loss_aug = bce_loss(softmax(output_aug), reweighted_target)
+            
+            loss = (loss + loss_aug)/2
+            
         elif args.train == 'vanilla_horizontal_flip_consistency_reg': # {vanilla loss}와 {flip의 output과 vanilla output}의 차이의 loss를 더함
             flip_input = torch.flip(input, (3,))
             input_var, target_var = torch.autograd.Variable(input), torch.autograd.Variable(target)
@@ -344,8 +342,8 @@ def train(train_loader, model, optimizer, epoch, args, log):
 
             loss_aug = mse_loss(output_anchor, output_aug) # flip한 결과와 그냥 vanilla output의 loss를 구함
             
-            loss = loss + loss_aug
-            
+            loss = (loss + loss_aug)/2
+        
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), input.size(0))
@@ -362,7 +360,8 @@ def train(train_loader, model, optimizer, epoch, args, log):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-
+        
+        
         if i % args.print_freq == 0:
             print_log('  Epoch: [{:03d}][{:03d}/{:03d}]   '
                 'Time {batch_time.val:.3f} ({batch_time.avg:.3f})   '
@@ -737,6 +736,9 @@ def main():
 
     if not os.path.exists(exp_dir):
             os.makedirs(exp_dir)
+    else:
+        print(exp_dir , "is aleardy exist")
+        exit(1)
     
     copy_script_to_folder(os.path.abspath(__file__), exp_dir)
 
@@ -762,13 +764,12 @@ def main():
         train_loader, valid_loader, _ , test_loader, num_classes = load_data_subset(args.data_aug, args.batch_size, 2 ,args.dataset, args.data_dir,  labels_per_class = args.labels_per_class, valid_labels_per_class = args.valid_labels_per_class)
     
     if args.dataset == 'tiny-imagenet-200':
-        stride = 2 
+        stride = 2
     else:
         stride = 1
     #train_loader, valid_loader, _ , test_loader, num_classes = load_data_subset(args.data_aug, args.batch_size, 2, args.dataset, args.data_dir, 0.0, labels_per_class=5000)
     print_log("=> creating model '{}'".format(args.arch), log)
     net = models.__dict__[args.arch](num_classes,args.dropout,per_img_std, stride).cuda()
-
     print_log("=> network :\n {}".format(net), log)
     args.num_classes = num_classes
 
@@ -822,55 +823,55 @@ def main():
         tr_acc, tr_acc5, tr_los  = train(train_loader, net, optimizer, epoch, args, log)
 
         # evaluate on validation set
-        val_acc, val_los   = validate(test_loader, net, log)
-    
-        if epoch % 50 == 0 or epoch > 397:
-            val_acc_adv, val_los_adv = validate_FGSM_1(test_loader, net, log)
-            val_acc_adv, val_los_adv = validate_FGSM_4(test_loader, net, log)
-            val_acc_adv, val_los_adv = validate_FGSM_8(test_loader, net, log)
-            val_acc_adv, val_los_adv = validate_FGSM_16(test_loader, net, log)
-            val_acc_adv, val_los_adv = validate_FGSM_32(test_loader, net, log)
-            val_acc_adv, val_los_adv = validate_FGSM_64(test_loader, net, log)
-            val_acc_adv, val_los_adv = validate_FGSM_128(test_loader, net, log)
-            val_acc_adv, val_los_adv = validate_PGD(test_loader, net, log)
+        if epoch % 5 == 0 or epoch > 397:
+            val_acc, val_los   = validate(test_loader, net, log)
+            train_loss.append(tr_los)
+            train_acc.append(tr_acc)
+            test_loss.append(val_los)
+            test_acc.append(val_acc)
 
-        train_loss.append(tr_los)
-        train_acc.append(tr_acc)
-        test_loss.append(val_los)
-        test_acc.append(val_acc)
+            dummy = recorder.update(epoch, tr_los, tr_acc, val_los, val_acc)
+
+            is_best = False
+            if val_acc > best_acc:
+                is_best = True
+                best_acc = val_acc
+
+            save_checkpoint({
+              'epoch': epoch + 1,
+              'arch': args.arch,
+              'state_dict': net.state_dict(),
+              'recorder': recorder,
+              'optimizer' : optimizer.state_dict(),
+            }, is_best, exp_dir, 'checkpoint.pth.tar')
+
+            # measure elapsed time
+            epoch_time.update(time.time() - start_time)
+            start_time = time.time()
+            recorder.plot_curve(result_png_path)
+
+            #import pdb; pdb.set_trace()
+            train_log = OrderedDict()
+            train_log['train_loss'] = train_loss
+            train_log['train_acc']=train_acc
+            train_log['test_loss']=test_loss
+            train_log['test_acc']=test_acc
+
+
+            pickle.dump(train_log, open( os.path.join(exp_dir,'log.pkl'), 'wb'))
+            plotting(exp_dir)    
+#         if epoch % 50 == 0 or epoch > 397:
+#             val_acc_adv, val_los_adv = validate_FGSM_1(test_loader, net, log)
+#             val_acc_adv, val_los_adv = validate_FGSM_4(test_loader, net, log)
+#             val_acc_adv, val_los_adv = validate_FGSM_8(test_loader, net, log)
+#             val_acc_adv, val_los_adv = validate_FGSM_16(test_loader, net, log)
+#             val_acc_adv, val_los_adv = validate_FGSM_32(test_loader, net, log)
+#             val_acc_adv, val_los_adv = validate_FGSM_64(test_loader, net, log)
+#             val_acc_adv, val_los_adv = validate_FGSM_128(test_loader, net, log)
+#             val_acc_adv, val_los_adv = validate_PGD(test_loader, net, log)
+
         
 
-
-        dummy = recorder.update(epoch, tr_los, tr_acc, val_los, val_acc)
-
-        is_best = False
-        if val_acc > best_acc:
-            is_best = True
-            best_acc = val_acc
-
-        save_checkpoint({
-          'epoch': epoch + 1,
-          'arch': args.arch,
-          'state_dict': net.state_dict(),
-          'recorder': recorder,
-          'optimizer' : optimizer.state_dict(),
-        }, is_best, exp_dir, 'checkpoint.pth.tar')
-
-        # measure elapsed time
-        epoch_time.update(time.time() - start_time)
-        start_time = time.time()
-        recorder.plot_curve(result_png_path)
-    
-        #import pdb; pdb.set_trace()
-        train_log = OrderedDict()
-        train_log['train_loss'] = train_loss
-        train_log['train_acc']=train_acc
-        train_log['test_loss']=test_loss
-        train_log['test_acc']=test_acc
-        
-                   
-        pickle.dump(train_log, open( os.path.join(exp_dir,'log.pkl'), 'wb'))
-        plotting(exp_dir)
     
     log.close()
 
